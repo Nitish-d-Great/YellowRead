@@ -52,7 +52,6 @@ class NitroliteService {
   constructor() {
     console.log('🟡 NitroliteService: Initializing with yellow-ts SDK...');
     console.log('   📚 Packages: yellow-ts + @erc7824/nitrolite + viem');
-    console.log('   📖 Docs: https://docs.yellow.org/');
 
     // Connection
     this.ws = null;
@@ -168,7 +167,6 @@ class NitroliteService {
         };
 
         this.ws.onclose = () => {
-          console.log('   🔌 WebSocket closed');
           this.isConnected = false;
         };
 
@@ -183,12 +181,10 @@ class NitroliteService {
    * Authenticate with ClearNode using EIP-712
    */
   async authenticate() {
-    console.log('');
     console.log('   🔐 Authenticating...');
 
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
-        console.log('   ⏱️ Auth timeout - continuing locally');
         this.isAuthenticated = false;
         resolve(false);
       }, 15000);
@@ -229,8 +225,6 @@ class NitroliteService {
       const message = JSON.parse(data);
       const method = message?.res?.[1] || message?.req?.[1] || 'unknown';
 
-      console.log('   📨 ClearNode:', method);
-
       if (method === 'auth_challenge') {
         this.handleAuthChallenge(message);
       } else if (method === 'auth_verify') {
@@ -242,7 +236,6 @@ class NitroliteService {
       } else if (method === 'close_app_session') {
         console.log('   ✅ Session closed on ClearNode');
       } else if (method === 'error') {
-        console.log('   ⚠️ Error:', message?.res?.[2]?.[0]?.error || 'unknown');
       }
     } catch (error) {
       // Silently ignore parse errors
@@ -385,7 +378,6 @@ class NitroliteService {
         console.log('   ⚠️ SDK error:', error.message);
       }
     } else {
-      console.log('   📍 Local mode (auth pending)');
     }
 
     this.localSessionId = `session_${Date.now()}`;
@@ -458,8 +450,6 @@ class NitroliteService {
         } catch (error) {
           console.log('   ⚠️ SDK error:', error.message);
         }
-      } else {
-        console.log('   📍 State updated locally');
       }
 
       this.currentAllocations = newAllocations;
@@ -508,7 +498,7 @@ class NitroliteService {
         console.log('   ⚠️ SDK error:', error.message);
       }
     } else {
-      console.log('   📍 Session closed locally');
+
     }
 
     return {

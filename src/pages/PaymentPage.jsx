@@ -5,7 +5,7 @@ import Header from '../components/Header';
 import { getNitroliteService } from '../services/nitrolite';
 import './PaymentPage.css';
 
-const PaymentPage = ({ walletAddress, sessionData }) => {
+const PaymentPage = ({ walletAddress, sessionData, nitrolite }) => {
   const navigate = useNavigate();
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
@@ -33,7 +33,6 @@ const PaymentPage = ({ walletAddress, sessionData }) => {
   }
 
   // Get Nitrolite service and state
-  const nitrolite = getNitroliteService();
   const nitroliteState = nitrolite?.getState?.() || {};
 
   // Use sessionData for billing
