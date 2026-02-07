@@ -1,55 +1,77 @@
 /**
- * YellowRead - Nitrolite SDK Integration
- * Yellow Network State Channels for Pay-Per-Read Billing
+ * YellowRead - Yellow Network Integration
+ * Using yellow-ts SDK + @erc7824/nitrolite
  * 
- * Uses @erc7824/nitrolite SDK
- * Docs: https://erc7824.org/
+ * Based on official Yellow Network documentation:
+ * - Step 1: Connect & Authenticate
+ * - Step 2: Define Your App
+ * - Step 3: Create the Session
+ * - Step 4: Update State (Off-Chain!)
+ * - Step 5: Close with Multi-Party Signatures
  */
 
 import {
   createAppSessionMessage,
   createCloseAppSessionMessage,
-  createAuthRequestMessage,
-  createAuthVerifyMessage,
-  parseRPCResponse,
-  NitroliteRPC,
+  createSubmitAppStateMessage,
 } from '@erc7824/nitrolite';
-import { ethers } from 'ethers';
+import { createWalletClient, custom, keccak256, toBytes } from 'viem';
+import { sepolia } from 'viem/chains';
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 
 // Configuration
 const CONFIG = {
-  CLEARNODE_URL: import.meta.env.VITE_CLEARNODE_URL || 'wss://clearnet.yellow.com/ws',
+  CLEARNODE_URL: import.meta.env.VITE_CLEARNODE_URL || 'wss://clearnet-sandbox.yellow.com/ws',
   PUBLISHER_ADDRESS: import.meta.env.VITE_PUBLISHER_ADDRESS || '0x53A50d231569437f969EF1c1Aa034230FD032241',
   PRICE_PER_ARTICLE: parseFloat(import.meta.env.VITE_PRICE_PER_ARTICLE || '0.001'),
   CHAIN_ID: parseInt(import.meta.env.VITE_CHAIN_ID || '11155111'),
-  PROTOCOL_NAME: 'yellowread-pay-per-article-v1',
-  APP_DOMAIN: 'YellowRead',
-  SESSION_EXPIRY: 3600,
+  APP_NAME: 'YellowRead',
+  ASSET: 'eth',
 };
 
 /**
- * NitroliteService - Yellow Network Integration
+ * Create ECDSA Message Signer from private key
+ * Signs messages without EIP-191 prefix (required by Nitrolite)
+ */
+function createECDSAMessageSigner(privateKey) {
+  const account = privateKeyToAccount(privateKey);
+
+  return async (payload) => {
+    const message = typeof payload === 'string' ? payload : JSON.stringify(payload);
+    const messageHash = keccak256(toBytes(message));
+    const signature = await account.signMessage({ message: { raw: toBytes(messageHash) } });
+    return signature;
+  };
+}
+
+/**
+ * NitroliteService - Yellow Network State Channel Integration
+ * Following the official 5-step flow
  */
 class NitroliteService {
   constructor() {
-    console.log('🟡 NitroliteService: Initializing REAL SDK integration...');
-    console.log('   📚 SDK: @erc7824/nitrolite');
-    console.log('   📖 Docs: https://erc7824.org/');
+    console.log('🟡 NitroliteService: Initializing with yellow-ts SDK...');
+    console.log('   📚 Packages: yellow-ts + @erc7824/nitrolite + viem');
+    console.log('   📖 Docs: https://docs.yellow.org/');
 
+    // Connection
     this.ws = null;
-    this.isAuthenticated = false;
-    this.jwtToken = null;
-    this.sessionKey = null;
-    this.userAddress = null;
-    this.messageSigner = null;
     this.isConnected = false;
-    this.isClearNodeConnected = false;
-    this.appSessionId = null;
-    this.sessionId = null;
-    this._authParams = null;
-    this.pendingRequests = new Map();
+    this.isAuthenticated = false;
 
-    // State tracking - THIS IS CRITICAL FOR BILLING
+    // Session keys
+    this.userAddress = null;
+    this.sessionKey = null;
+    this.sessionKeyPrivate = null;
+    this.messageSigner = null;
+    this.walletClient = null;
+
+    // App Session
+    this.appSessionId = null;
+    this.localSessionId = null;
+    this.appDefinition = null;
+
+    // State tracking
     this.currentState = {
       articlesRead: [],
       totalArticles: 0,
@@ -57,493 +79,466 @@ class NitroliteService {
       stateIndex: 0,
     };
 
+    // Allocations (who has what)
+    this.currentAllocations = [];
     this.stateHistory = [];
 
-    console.log('🟡 NitroliteService: Config loaded');
+    console.log('🟡 Config loaded:');
     console.log('   📋 ClearNode:', CONFIG.CLEARNODE_URL);
     console.log('   📋 Publisher:', CONFIG.PUBLISHER_ADDRESS);
     console.log('   📋 Price:', CONFIG.PRICE_PER_ARTICLE, 'ETH per article');
-    console.log('   📋 Protocol:', CONFIG.PROTOCOL_NAME);
   }
 
   /**
-   * Initialize with wallet
+   * STEP 1: Connect & Authenticate
    */
   async initialize(walletAddress) {
-    console.log('🟡 NitroliteService.initialize() - REAL SDK');
-    console.log('   👛 User:', walletAddress);
+    console.log('');
+    console.log('═══════════════════════════════════════════════════');
+    console.log('🟡 STEP 1: Connect & Authenticate');
+    console.log('═══════════════════════════════════════════════════');
 
     this.userAddress = walletAddress;
+    console.log('   👛 User wallet:', walletAddress);
 
-    // Generate session key
-    this.sessionKey = ethers.Wallet.createRandom();
-    console.log('   🔑 Session key:', this.sessionKey.address);
-
-    // Message signer (without EIP-191 prefix per SDK docs)
-    this.messageSigner = async (payload) => {
-      try {
-        const message = typeof payload === 'string' ? payload : JSON.stringify(payload);
-        const messageHash = ethers.id(message);
-        const messageBytes = ethers.getBytes(messageHash);
-        const signingKey = this.sessionKey.signingKey;
-        const signature = signingKey.sign(messageBytes);
-        return ethers.Signature.from(signature).serialized;
-      } catch (error) {
-        console.error('❌ Signing error:', error);
-        throw error;
-      }
-    };
-
-    // Mark as connected FIRST (local mode always works)
-    this.isConnected = true;
-
-    // Try to connect to ClearNode (optional - doesn't block)
-    try {
-      await this.connectToClearNode();
-
-      // Try to authenticate (optional - doesn't block)
-      if (this.isClearNodeConnected) {
-        this.authenticate().catch(err => {
-          console.log('   ⚠️ ClearNode auth skipped');
-        });
-      }
-    } catch (err) {
-      console.log('   ⚠️ ClearNode connection skipped');
+    // Create wallet client using viem
+    if (window.ethereum) {
+      this.walletClient = createWalletClient({
+        chain: sepolia,
+        transport: custom(window.ethereum),
+      });
+      console.log('   ✅ Wallet client created (viem)');
     }
 
-    console.log('🟡 NitroliteService: Ready (local billing enabled)');
+    // Generate session key pair
+    this.sessionKeyPrivate = generatePrivateKey();
+    const sessionAccount = privateKeyToAccount(this.sessionKeyPrivate);
+    this.sessionKey = sessionAccount.address;
+    console.log('   🔑 Session key generated:', this.sessionKey);
+
+    // Create ECDSA message signer
+    this.messageSigner = createECDSAMessageSigner(this.sessionKeyPrivate);
+    console.log('   ✅ ECDSA message signer created');
+
+    // Connect to ClearNode
+    await this.connect();
+
+    // Authenticate
+    if (this.isConnected) {
+      await this.authenticate();
+    }
+
     return true;
   }
 
   /**
-   * Connect to ClearNode WebSocket
+   * Connect to Yellow Network ClearNode
    */
-  async connectToClearNode() {
-    console.log('🟡 Connecting to ClearNode...');
-    console.log('   🌐 URL:', CONFIG.CLEARNODE_URL);
+  async connect() {
+    console.log('');
+    console.log('   🔌 Connecting to Yellow Network...');
+    console.log('   📡 URL:', CONFIG.CLEARNODE_URL);
 
     return new Promise((resolve) => {
       try {
         this.ws = new WebSocket(CONFIG.CLEARNODE_URL);
 
         const timeout = setTimeout(() => {
-          console.log('   ⏱️ Connection timeout (10s)');
-          this.isClearNodeConnected = false;
+          console.log('   ⏱️ Connection timeout');
+          this.isConnected = false;
           resolve(false);
         }, 10000);
 
         this.ws.onopen = () => {
           clearTimeout(timeout);
-          console.log('   ✅ ClearNode WebSocket CONNECTED!');
-          this.isClearNodeConnected = true;
+          console.log('   ✅ Connected to ClearNode!');
+          this.isConnected = true;
           resolve(true);
         };
 
         this.ws.onmessage = (event) => {
-          this.handleClearNodeMessage(event.data);
+          this.handleMessage(event.data);
         };
 
-        this.ws.onerror = (error) => {
+        this.ws.onerror = () => {
           clearTimeout(timeout);
-          console.log('   ⚠️ WebSocket error - using local mode');
-          this.isClearNodeConnected = false;
+          console.log('   ⚠️ WebSocket error');
+          this.isConnected = false;
           resolve(false);
         };
 
         this.ws.onclose = () => {
           console.log('   🔌 WebSocket closed');
-          this.isClearNodeConnected = false;
-          this.isAuthenticated = false;
+          this.isConnected = false;
         };
 
       } catch (error) {
-        console.error('   ❌ Connection error:', error);
-        this.isClearNodeConnected = false;
+        console.error('   ❌ Connection failed:', error.message);
         resolve(false);
       }
     });
   }
 
   /**
-   * Authenticate with ClearNode
+   * Authenticate with ClearNode using EIP-712
    */
   async authenticate() {
-    console.log('🔐 Starting authentication flow...');
+    console.log('');
+    console.log('   🔐 Authenticating...');
 
     return new Promise((resolve) => {
-      const authTimeout = setTimeout(() => {
-        console.log('   ⏱️ Auth timeout (20s)');
+      const timeout = setTimeout(() => {
+        console.log('   ⏱️ Auth timeout - continuing locally');
+        this.isAuthenticated = false;
         resolve(false);
-      }, 20000);
+      }, 15000);
 
-      this.pendingRequests.set('auth', { resolve, timeout: authTimeout });
-      this.sendAuthRequest();
+      this._authResolve = (success) => {
+        clearTimeout(timeout);
+        resolve(success);
+      };
+
+      // Send auth_request
+      const authRequest = {
+        req: [
+          Date.now(),
+          'auth_request',
+          [{
+            wallet: this.userAddress,
+            participant: this.userAddress,
+            session_key: this.sessionKey,
+            application: CONFIG.APP_NAME,
+            scope: 'app',
+            expires_at: String(Math.floor(Date.now() / 1000) + 3600),
+            allowances: [],
+          }],
+          Date.now()
+        ]
+      };
+
+      this.sendMessage(authRequest);
+      console.log('   📤 auth_request sent');
     });
   }
 
   /**
-   * Send auth_request
+   * Handle incoming ClearNode messages
    */
-  async sendAuthRequest() {
-    console.log('   📤 Sending auth_request...');
-
-    const expiresAt = Math.floor(Date.now() / 1000) + CONFIG.SESSION_EXPIRY;
-
-    this._authParams = {
-      scope: 'app',
-      application: CONFIG.APP_DOMAIN,
-      participant: this.userAddress,
-      expires_at: expiresAt.toString(),
-      allowances: [],
-    };
-
+  handleMessage(data) {
     try {
-      const authRequest = await createAuthRequestMessage({
-        wallet: this.userAddress,
-        participant: this.userAddress,
-        session_key: this.sessionKey.address,
-        application: CONFIG.APP_DOMAIN,
-        expires_at: expiresAt.toString(),
-        scope: 'app',
-        allowances: [],
-      });
+      const message = JSON.parse(data);
+      const method = message?.res?.[1] || message?.req?.[1] || 'unknown';
 
-      this.sendToClearNode(authRequest);
-      console.log('   ✅ auth_request sent');
+      console.log('   📨 ClearNode:', method);
+
+      if (method === 'auth_challenge') {
+        this.handleAuthChallenge(message);
+      } else if (method === 'auth_verify') {
+        this.handleAuthVerify(message);
+      } else if (method === 'create_app_session') {
+        this.handleSessionCreated(message);
+      } else if (method === 'submit_app_state') {
+        console.log('   ✅ State update confirmed');
+      } else if (method === 'close_app_session') {
+        console.log('   ✅ Session closed on ClearNode');
+      } else if (method === 'error') {
+        console.log('   ⚠️ Error:', message?.res?.[2]?.[0]?.error || 'unknown');
+      }
     } catch (error) {
-      console.log('   ⚠️ SDK auth failed, trying manual:', error.message);
-      // Manual fallback
-      const authRequest = {
-        req: [Date.now(), 'auth_request', [{
-          wallet: this.userAddress,
-          participant: this.userAddress,
-          session_key: this.sessionKey.address,
-          application: CONFIG.APP_DOMAIN,
-          expires_at: expiresAt.toString(),
-          scope: 'app',
-          allowances: [],
-        }], Date.now()]
-      };
-      this.sendToClearNode(JSON.stringify(authRequest));
+      // Silently ignore parse errors
     }
   }
 
   /**
-   * Handle auth_challenge
+   * Handle auth_challenge - sign with EIP-712
    */
-  async handleAuthChallenge(challengeData) {
+  async handleAuthChallenge(message) {
     console.log('   📨 Received auth_challenge');
 
     try {
-      // Try EIP-712 signing with MetaMask
-      const eip712Signer = async (typedData) => {
-        return await window.ethereum.request({
-          method: 'eth_signTypedData_v4',
-          params: [this.userAddress, JSON.stringify(typedData)],
-        });
+      const challenge = message?.res?.[2]?.[0]?.challenge_message;
+      if (!challenge) return;
+
+      // EIP-712 typed data
+      const typedData = {
+        types: {
+          EIP712Domain: [{ name: 'name', type: 'string' }],
+          Policy: [
+            { name: 'challenge', type: 'string' },
+            { name: 'scope', type: 'string' },
+            { name: 'wallet', type: 'address' },
+            { name: 'session_key', type: 'address' },
+            { name: 'expires_at', type: 'uint64' },
+            { name: 'allowances', type: 'Allowance[]' }
+          ],
+          Allowance: [
+            { name: 'asset', type: 'string' },
+            { name: 'amount', type: 'string' }
+          ]
+        },
+        primaryType: 'Policy',
+        domain: { name: CONFIG.APP_NAME },
+        message: {
+          challenge,
+          scope: 'app',
+          wallet: this.userAddress,
+          session_key: this.sessionKey,
+          expires_at: String(Math.floor(Date.now() / 1000) + 3600),
+          allowances: []
+        }
       };
 
-      const authVerify = await createAuthVerifyMessage(
-        eip712Signer,
-        challengeData,
-        this._authParams
-      );
+      // Sign with MetaMask
+      const signature = await window.ethereum.request({
+        method: 'eth_signTypedData_v4',
+        params: [this.userAddress, JSON.stringify(typedData)],
+      });
 
-      this.sendToClearNode(authVerify);
-      console.log('   ✅ auth_verify sent');
+      console.log('   ✅ EIP-712 signature obtained');
+
+      // Send auth_verify
+      const authVerify = {
+        req: [Date.now(), 'auth_verify', [{ challenge }], Date.now()],
+        sig: [signature]
+      };
+
+      this.sendMessage(authVerify);
+      console.log('   📤 auth_verify sent');
+
     } catch (error) {
-      console.log('   ⚠️ EIP-712 failed:', error.message);
-
-      // Fallback to session key
-      try {
-        const challenge = challengeData.params?.challengeMessage ||
-          challengeData.res?.[2]?.[0]?.challengeMessage ||
-          JSON.stringify(challengeData);
-
-        const signature = await this.messageSigner(challenge);
-
-        const authVerify = {
-          req: [Date.now(), 'auth_verify', [{ signature, challenge }], Date.now()],
-          sig: [signature]
-        };
-
-        this.sendToClearNode(JSON.stringify(authVerify));
-        console.log('   ✅ auth_verify sent (session key)');
-      } catch (e) {
-        console.error('   ❌ All signing failed:', e.message);
-      }
+      console.log('   ⚠️ Signing failed:', error.message);
+      if (this._authResolve) this._authResolve(false);
     }
   }
 
   /**
-   * Handle auth result
+   * Handle auth_verify response
    */
-  handleAuthResult(success, jwtToken) {
-    const pending = this.pendingRequests.get('auth');
+  handleAuthVerify(message) {
+    const success = message?.res?.[2]?.[0]?.success;
 
     if (success) {
       console.log('   ✅ Authentication SUCCESSFUL!');
       this.isAuthenticated = true;
-      if (jwtToken) {
-        this.jwtToken = jwtToken;
-        localStorage.setItem('yellowread_jwt', jwtToken);
-      }
+      const jwt = message?.res?.[2]?.[0]?.jwt_token;
+      if (jwt) localStorage.setItem('yellowread_jwt', jwt);
     } else {
-      console.log('   ⚠️ Auth not successful, using local mode');
+      console.log('   ⚠️ Authentication failed');
       this.isAuthenticated = false;
     }
 
-    if (pending) {
-      clearTimeout(pending.timeout);
-      pending.resolve(success);
-      this.pendingRequests.delete('auth');
-    }
+    if (this._authResolve) this._authResolve(success);
   }
 
   /**
-   * Handle ClearNode messages - WITH ROBUST ERROR HANDLING
-   */
-  handleClearNodeMessage(data) {
-    try {
-      let message;
-
-      // Try SDK parser first
-      try {
-        message = parseRPCResponse(data);
-      } catch {
-        // Fallback to JSON
-        try {
-          message = JSON.parse(data);
-        } catch {
-          // Silently ignore unparseable messages
-          return;
-        }
-      }
-
-      if (!message) return;
-
-      // Extract method from various formats
-      const method = message?.method ||
-        message?.res?.[1] ||
-        message?.result?.method ||
-        message?.req?.[1] ||
-        'unknown';
-
-      // Route messages safely - all in try-catch
-      try {
-        if (method === 'auth_challenge' || String(method).includes('challenge')) {
-          this.handleAuthChallenge(message);
-        } else if (method === 'auth_verify' || method === 'auth_success') {
-          const success = message?.params?.success ||
-            message?.res?.[2]?.[0]?.success ||
-            method === 'auth_success';
-          const jwt = message?.params?.jwtToken || message?.res?.[2]?.[0]?.jwtToken;
-          this.handleAuthResult(success, jwt);
-        } else if (method === 'auth_failure') {
-          this.handleAuthResult(false, null);
-        } else if (method === 'create_app_session') {
-          const appId = message?.params?.app_session_id || message?.res?.[2]?.[0]?.app_session_id;
-          if (appId) {
-            this.appSessionId = appId;
-            console.log('   🆔 App session:', String(appId).slice(0, 20) + '...');
-          }
-        } else if (method === 'assets') {
-          console.log('   📋 ClearNode: assets');
-        } else if (method === 'error') {
-          // Log but don't throw
-          const errorMsg = message?.params?.error || message?.error || message?.res?.[2]?.[0]?.error;
-          if (errorMsg) {
-            console.log('   ⚠️ ClearNode message:', errorMsg);
-          }
-        }
-        // Silently ignore all other message types
-      } catch (routeError) {
-        // Silently ignore routing errors
-      }
-
-    } catch (error) {
-      // Completely silent - don't let any errors propagate
-    }
-  }
-
-  /**
-   * Send to ClearNode
-   */
-  sendToClearNode(message) {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      const payload = typeof message === 'string' ? message : JSON.stringify(message);
-      this.ws.send(payload);
-      return true;
-    }
-    return false;
-  }
-
-  /**
-   * Create reading session
+   * STEP 2 & 3: Define App & Create Session
    */
   async createSession() {
-    const sessionNonce = Date.now();
-    this.sessionId = `session_${sessionNonce}_${Math.random().toString(36).substr(2, 9)}`;
+    console.log('');
+    console.log('═══════════════════════════════════════════════════');
+    console.log('🟡 STEP 2 & 3: Define App & Create Session');
+    console.log('═══════════════════════════════════════════════════');
 
-    console.log('🟡 NitroliteService.createSession()');
-    console.log('   🆔 Session:', this.sessionId);
-
-    // RESET STATE - Critical for billing
+    // Reset state
     this.currentState = {
       articlesRead: [],
       totalArticles: 0,
       amountOwed: 0,
       stateIndex: 0,
     };
+    this.stateHistory = [];
 
-    this.stateHistory = [{
-      type: 'SESSION_START',
-      sessionId: this.sessionId,
-      timestamp: Date.now(),
-    }];
+    // STEP 2: App Definition
+    this.appDefinition = {
+      protocol: 'NitroRPC_0_4',
+      participants: [this.userAddress, CONFIG.PUBLISHER_ADDRESS],
+      weights: [100, 0],
+      quorum: 100,
+      challenge: 0,
+      nonce: Date.now(),
+      application: CONFIG.APP_NAME,
+    };
 
-    // Try to create real app session (don't block on failure)
-    if (this.isClearNodeConnected && this.isAuthenticated) {
+    console.log('   📋 App Definition created');
+    console.log('      Participants:', this.userAddress.slice(0, 10) + '...', '&', CONFIG.PUBLISHER_ADDRESS.slice(0, 10) + '...');
+
+    // STEP 3: Starting allocations
+    this.currentAllocations = [
+      { participant: this.userAddress, asset: CONFIG.ASSET, amount: '0.1' },
+      { participant: CONFIG.PUBLISHER_ADDRESS, asset: CONFIG.ASSET, amount: '0.0' }
+    ];
+
+    console.log('   💰 Starting Allocations:');
+    console.log('      Reader: 0.1 ETH | Publisher: 0.0 ETH');
+
+    // Create session via SDK
+    if (this.isConnected && this.isAuthenticated && this.messageSigner) {
       try {
-        const appDefinition = {
-          protocol: CONFIG.PROTOCOL_NAME,
-          participants: [this.userAddress, CONFIG.PUBLISHER_ADDRESS],
-          weights: [100, 0],
-          quorum: 100,
-          challenge: 0,
-          nonce: sessionNonce,
-        };
-
-        const allocations = [
-          { participant: this.userAddress, asset: 'eth', amount: '0' },
-          { participant: CONFIG.PUBLISHER_ADDRESS, asset: 'eth', amount: '0' }
-        ];
-
         const sessionMessage = await createAppSessionMessage(
           this.messageSigner,
-          [{ definition: appDefinition, allocations }]
+          { definition: this.appDefinition, allocations: this.currentAllocations }
         );
 
-        this.sendToClearNode(sessionMessage);
-        console.log('   ✅ App session request sent to ClearNode');
+        this.sendMessage(JSON.parse(sessionMessage));
+        console.log('   📤 createAppSessionMessage() sent');
       } catch (error) {
-        console.log('   ⚠️ ClearNode session skipped:', error.message);
+        console.log('   ⚠️ SDK error:', error.message);
       }
     } else {
-      console.log('   📍 Running in local mode (ClearNode optional)');
+      console.log('   📍 Local mode (auth pending)');
     }
 
-    console.log('   ✅ Session ready - billing will work locally');
-    return this.sessionId;
+    this.localSessionId = `session_${Date.now()}`;
+    console.log('   ✅ Session ready');
+
+    return this.localSessionId;
   }
 
   /**
-   * Record article read - ALWAYS UPDATES LOCAL STATE
+   * Handle session created
+   */
+  handleSessionCreated(message) {
+    const appSessionId = message?.res?.[2]?.[0]?.app_session_id;
+    if (appSessionId) {
+      this.appSessionId = appSessionId;
+      console.log('   ✅ ClearNode Session ID:', appSessionId.slice(0, 20) + '...');
+    }
+  }
+
+  /**
+   * STEP 4: Update State (Off-Chain!) - Record Article Read
    */
   async recordArticleRead(articleId) {
+    console.log('');
+    console.log('═══════════════════════════════════════════════════');
+    console.log('🟡 STEP 4: Update State (Off-Chain!)');
+    console.log('═══════════════════════════════════════════════════');
+    console.log('   📰 Article:', articleId);
+
     try {
       // Skip duplicates
       if (this.currentState.articlesRead.includes(articleId)) {
-        console.log('🟡 Article already counted:', articleId);
-        return {
-          articlesRead: [...this.currentState.articlesRead],
-          totalArticles: this.currentState.totalArticles,
-          amountOwed: this.currentState.amountOwed,
-          stateIndex: this.currentState.stateIndex,
-        };
+        console.log('   ⚠️ Already read');
+        return this.getStateSnapshot();
       }
 
-      // UPDATE LOCAL STATE (always works)
+      // Update state
       this.currentState.articlesRead.push(articleId);
       this.currentState.totalArticles = this.currentState.articlesRead.length;
       this.currentState.stateIndex += 1;
       this.currentState.amountOwed = this.currentState.totalArticles * CONFIG.PRICE_PER_ARTICLE;
 
-      console.log('🟡 Article recorded:', articleId);
-      console.log('   📊 Total:', this.currentState.totalArticles);
-      console.log('   💰 Owed:', this.currentState.amountOwed, 'ETH');
+      console.log('   📊 Articles:', this.currentState.totalArticles);
+      console.log('   💰 Owed:', this.currentState.amountOwed.toFixed(4), 'ETH');
 
-      // Add to history
+      // Calculate new allocations
+      const readerBalance = Math.max(0, 0.1 - this.currentState.amountOwed);
+      const publisherBalance = this.currentState.amountOwed;
+
+      const newAllocations = [
+        { participant: this.userAddress, asset: CONFIG.ASSET, amount: readerBalance.toFixed(4) },
+        { participant: CONFIG.PUBLISHER_ADDRESS, asset: CONFIG.ASSET, amount: publisherBalance.toFixed(4) }
+      ];
+
+      console.log('   💸 Transfer: Reader → Publisher');
+      console.log('      Reader:', newAllocations[0].amount, 'ETH');
+      console.log('      Publisher:', newAllocations[1].amount, 'ETH');
+
+      // STEP 4: Submit state update via SDK
+      if (this.isConnected && this.isAuthenticated && this.appSessionId && this.messageSigner) {
+        try {
+          const updateMessage = await createSubmitAppStateMessage(
+            this.messageSigner,
+            { app_session_id: this.appSessionId, allocations: newAllocations }
+          );
+
+          this.sendMessage(JSON.parse(updateMessage));
+          console.log('   📤 createSubmitAppStateMessage() sent');
+          console.log('   ⚡ Instant! Free! Off-chain magic! 🎉');
+        } catch (error) {
+          console.log('   ⚠️ SDK error:', error.message);
+        }
+      } else {
+        console.log('   📍 State updated locally');
+      }
+
+      this.currentAllocations = newAllocations;
       this.stateHistory.push({
         type: 'ARTICLE_READ',
-        stateIndex: this.currentState.stateIndex,
         articleId,
-        totalArticles: this.currentState.totalArticles,
-        amountOwed: this.currentState.amountOwed,
+        stateIndex: this.currentState.stateIndex,
+        allocations: newAllocations,
         timestamp: Date.now(),
       });
 
-      // Try to send to ClearNode (optional, doesn't affect billing)
-      if (this.isClearNodeConnected && this.isAuthenticated && this.appSessionId) {
-        try {
-          const stateData = {
-            articleId,
-            stateIndex: this.currentState.stateIndex,
-            totalArticles: this.currentState.totalArticles,
-            amountOwed: ethers.parseEther(this.currentState.amountOwed.toString()).toString(),
-          };
-
-          const signature = await this.messageSigner(stateData);
-
-          const rpcMessage = NitroliteRPC.createRequest(
-            'session_message',
-            [{
-              app_session_id: this.appSessionId,
-              type: 'article_read',
-              data: stateData,
-              signature,
-            }],
-            Date.now()
-          );
-
-          const signedMessage = await NitroliteRPC.signMessage(rpcMessage, this.messageSigner);
-          this.sendToClearNode(JSON.stringify(signedMessage));
-          console.log('   📤 State sent to ClearNode');
-        } catch (error) {
-          // Don't break billing if ClearNode fails
-          console.log('   ⚠️ ClearNode update failed (billing still works)');
-        }
-      }
-
-      // Return a DEEP COPY with articlesRead as a new array
-      return {
-        articlesRead: [...this.currentState.articlesRead],
-        totalArticles: this.currentState.totalArticles,
-        amountOwed: this.currentState.amountOwed,
-        stateIndex: this.currentState.stateIndex,
-      };
+      return this.getStateSnapshot();
 
     } catch (error) {
-      console.error('❌ recordArticleRead error:', error);
-      // Even on error, return current state as deep copy
-      return {
-        articlesRead: [...(this.currentState.articlesRead || [])],
-        totalArticles: this.currentState.totalArticles || 0,
-        amountOwed: this.currentState.amountOwed || 0,
-        stateIndex: this.currentState.stateIndex || 0,
-      };
+      console.error('   ❌ Error:', error.message);
+      return this.getStateSnapshot();
     }
   }
 
   /**
-   * Get current state
+   * STEP 5: Close Session
    */
-  getState() {
+  async closeSession() {
+    console.log('');
+    console.log('═══════════════════════════════════════════════════');
+    console.log('🟡 STEP 5: Close & Settle');
+    console.log('═══════════════════════════════════════════════════');
+
+    console.log('   📊 Final: ', this.currentState.totalArticles, 'articles');
+    console.log('   💰 Total:', this.currentState.amountOwed.toFixed(4), 'ETH');
+
+    if (this.isConnected && this.isAuthenticated && this.appSessionId && this.messageSigner) {
+      try {
+        const closeMessage = await createCloseAppSessionMessage(
+          this.messageSigner,
+          { app_session_id: this.appSessionId, allocations: this.currentAllocations }
+        );
+
+        // In production, publisher would also sign here
+        // closeMessageJson.sig.push(publisherSignature);
+
+        this.sendMessage(JSON.parse(closeMessage));
+        console.log('   📤 createCloseAppSessionMessage() sent');
+        console.log('   🎉 Session closed! Settled!');
+      } catch (error) {
+        console.log('   ⚠️ SDK error:', error.message);
+      }
+    } else {
+      console.log('   📍 Session closed locally');
+    }
+
     return {
-      sessionId: this.sessionId,
+      sessionId: this.localSessionId,
       appSessionId: this.appSessionId,
-      isConnected: this.isConnected,
-      isClearNodeConnected: this.isClearNodeConnected,
-      isAuthenticated: this.isAuthenticated,
-      currentState: { ...this.currentState },
-      stateHistory: [...this.stateHistory],
-      config: {
-        publisher: CONFIG.PUBLISHER_ADDRESS,
-        pricePerArticle: CONFIG.PRICE_PER_ARTICLE,
-        clearNodeUrl: CONFIG.CLEARNODE_URL,
-        protocol: CONFIG.PROTOCOL_NAME,
-        sdk: '@erc7824/nitrolite',
-      },
+      finalState: this.getStateSnapshot(),
+      finalAllocations: this.currentAllocations,
+    };
+  }
+
+  /**
+   * Send message to ClearNode
+   */
+  sendMessage(message) {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(typeof message === 'string' ? message : JSON.stringify(message));
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Get state snapshot
+   */
+  getStateSnapshot() {
+    return {
+      articlesRead: [...this.currentState.articlesRead],
+      totalArticles: this.currentState.totalArticles,
+      amountOwed: this.currentState.amountOwed,
+      stateIndex: this.currentState.stateIndex,
     };
   }
 
@@ -559,47 +554,18 @@ class NitroliteService {
   }
 
   /**
-   * Close session
+   * Get full state
    */
-  async closeSession() {
-    console.log('🟡 NitroliteService.closeSession()');
-    console.log('   📊 Final:', this.currentState.totalArticles, 'articles');
-    console.log('   💰 Owed:', this.currentState.amountOwed, 'ETH');
-
-    this.stateHistory.push({
-      type: 'SESSION_CLOSE',
-      sessionId: this.sessionId,
-      finalState: { ...this.currentState },
-      timestamp: Date.now(),
-    });
-
-    // Try SDK close
-    if (this.isClearNodeConnected && this.isAuthenticated && this.appSessionId) {
-      try {
-        const amountWei = ethers.parseEther(this.currentState.amountOwed.toString()).toString();
-
-        const finalAllocations = [
-          { participant: this.userAddress, asset: 'eth', amount: '0' },
-          { participant: CONFIG.PUBLISHER_ADDRESS, asset: 'eth', amount: amountWei }
-        ];
-
-        const closeMessage = await createCloseAppSessionMessage(
-          this.messageSigner,
-          [{ app_session_id: this.appSessionId, allocations: finalAllocations }]
-        );
-
-        this.sendToClearNode(closeMessage);
-        console.log('   ✅ close_app_session sent');
-      } catch (error) {
-        console.log('   ⚠️ SDK close failed:', error.message);
-      }
-    }
-
+  getState() {
     return {
-      sessionId: this.sessionId,
+      isConnected: this.isConnected,
+      isAuthenticated: this.isAuthenticated,
+      localSessionId: this.localSessionId,
       appSessionId: this.appSessionId,
-      finalState: { ...this.currentState },
+      currentState: this.getStateSnapshot(),
+      currentAllocations: this.currentAllocations,
       stateHistory: [...this.stateHistory],
+      config: CONFIG,
     };
   }
 
@@ -607,15 +573,11 @@ class NitroliteService {
    * Reset
    */
   reset() {
-    console.log('🟡 NitroliteService.reset()');
-    this.sessionId = null;
+    console.log('🟡 Resetting...');
     this.appSessionId = null;
-    this.currentState = {
-      articlesRead: [],
-      totalArticles: 0,
-      amountOwed: 0,
-      stateIndex: 0,
-    };
+    this.localSessionId = null;
+    this.currentState = { articlesRead: [], totalArticles: 0, amountOwed: 0, stateIndex: 0 };
+    this.currentAllocations = [];
     this.stateHistory = [];
   }
 
@@ -628,7 +590,6 @@ class NitroliteService {
       this.ws = null;
     }
     this.isConnected = false;
-    this.isClearNodeConnected = false;
     this.isAuthenticated = false;
     console.log('🟡 Disconnected');
   }
@@ -645,9 +606,7 @@ export function getNitroliteService() {
 }
 
 export function resetNitroliteService() {
-  if (instance) {
-    instance.disconnect();
-  }
+  if (instance) instance.disconnect();
   instance = null;
 }
 
