@@ -39,8 +39,8 @@ const PaymentPage = ({ walletAddress, sessionData, nitrolite }) => {
   const articlesRead = sessionData?.totalArticles || 0;
   const totalCost = sessionData?.totalCost || 0;
   const stateUpdates = nitroliteState.stateHistory?.length || 0;
-  const sessionId = nitroliteState.sessionId;
-  const isClearNodeConnected = nitroliteState.isClearNodeConnected;
+  const sessionId = nitroliteState.appSessionId || nitroliteState.localSessionId;
+  const isClearNodeConnected = nitroliteState.isAuthenticated;
 
   // Redirect if nothing to pay
   if (totalCost === 0) {
@@ -169,9 +169,7 @@ const PaymentPage = ({ walletAddress, sessionData, nitrolite }) => {
             <div className="status-header">
               <span className="yellow-icon">🟡</span>
               <span className="status-title">Yellow Network Session</span>
-              <span className={`connection-badge ${isClearNodeConnected ? 'connected' : 'local'}`}>
-                {isClearNodeConnected ? '● Connected' : '● Local'}
-              </span>
+
             </div>
 
             <div className="status-grid">
