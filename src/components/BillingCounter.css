@@ -1,0 +1,182 @@
+/* BillingCounter Styles */
+
+.billing-counter {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem;
+}
+
+/* Header */
+.counter-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.counter-icon {
+  font-size: 1.25rem;
+}
+
+.counter-header h3 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+/* Main Stats */
+.counter-stats {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-md);
+  margin-bottom: 1rem;
+}
+
+.stat-item {
+  flex: 1;
+  text-align: center;
+}
+
+.stat-label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 0.25rem;
+}
+
+.stat-value {
+  display: block;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.stat-value.articles {
+  color: var(--accent-blue);
+}
+
+.stat-value.cost {
+  color: var(--yellow-primary);
+  font-family: monospace;
+}
+
+.stat-divider {
+  width: 1px;
+  height: 40px;
+  background: var(--border-color);
+}
+
+/* Next Charge Progress */
+.next-charge {
+  padding: 1rem;
+  background: linear-gradient(135deg, rgba(255, 215, 0, 0.05), rgba(255, 215, 0, 0.02));
+  border: 1px solid rgba(255, 215, 0, 0.2);
+  border-radius: var(--radius-md);
+  margin-bottom: 1rem;
+}
+
+.next-charge-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.75rem;
+}
+
+.charge-amount {
+  color: var(--yellow-primary);
+  font-weight: 600;
+}
+
+.progress-track {
+  position: relative;
+  height: 8px;
+  background: var(--bg-secondary);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--yellow-primary), var(--yellow-dark));
+  border-radius: 4px;
+  transition: width 0.5s ease;
+}
+
+.progress-markers {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  padding: 0 10%;
+}
+
+.marker {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--bg-card);
+  border: 2px solid var(--border-color);
+  transition: all var(--transition-fast);
+}
+
+.marker.filled {
+  background: var(--yellow-primary);
+  border-color: var(--yellow-primary);
+}
+
+.progress-text {
+  font-size: 0.688rem;
+  color: var(--text-muted);
+  text-align: center;
+  margin: 0;
+}
+
+/* Pricing Info */
+.pricing-info {
+  margin-bottom: 1rem;
+}
+
+.price-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.5rem 0;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.price-row:last-child {
+  border-bottom: none;
+}
+
+.price-value {
+  color: var(--text-primary);
+  font-family: monospace;
+}
+
+/* Network Badge */
+.network-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.network-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--accent-green);
+  border-radius: 50%;
+  animation: pulse 2s ease-in-out infinite;
+}

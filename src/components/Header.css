@@ -1,0 +1,123 @@
+/* Header Styles */
+
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: rgba(10, 10, 15, 0.95);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.header-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0.875rem 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Logo */
+.header-logo {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  text-decoration: none;
+  color: var(--text-primary);
+  transition: opacity var(--transition-fast);
+}
+
+.header-logo:hover {
+  opacity: 0.9;
+}
+
+.logo-icon {
+  font-size: 1.5rem;
+}
+
+.logo-text {
+  font-size: 1.25rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--yellow-primary), var(--yellow-dark));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Right Side */
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+/* Yellow Badge */
+.yellow-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.875rem;
+  background: rgba(255, 215, 0, 0.1);
+  border: 1px solid rgba(255, 215, 0, 0.2);
+  border-radius: var(--radius-md);
+  font-size: 0.75rem;
+  color: var(--yellow-primary);
+  font-weight: 500;
+}
+
+.yellow-icon {
+  font-size: 0.875rem;
+}
+
+/* Wallet Pill */
+.wallet-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.875rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: 0.813rem;
+}
+
+.wallet-icon {
+  font-size: 1rem;
+}
+
+.wallet-address {
+  font-family: monospace;
+  color: var(--text-secondary);
+}
+
+.network-indicator {
+  width: 8px;
+  height: 8px;
+  background: var(--accent-green);
+  border-radius: 50%;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .header-container {
+    padding: 0.75rem 1rem;
+  }
+
+  .yellow-badge {
+    display: none;
+  }
+
+  .badge-text {
+    display: none;
+  }
+
+  .wallet-pill {
+    padding: 0.375rem 0.625rem;
+  }
+
+  .wallet-address {
+    font-size: 0.75rem;
+  }
+}
