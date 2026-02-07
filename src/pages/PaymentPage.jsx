@@ -182,7 +182,7 @@ const PaymentPage = ({ walletAddress, sessionData }) => {
               </div>
               <div className="status-item">
                 <span className="status-label">State Updates</span>
-                <span className="status-value highlight">{stateUpdates - 1}</span>
+                <span className="status-value highlight">{stateUpdates}</span>
               </div>
               <div className="status-item">
                 <span className="status-label">Gas Saved</span>

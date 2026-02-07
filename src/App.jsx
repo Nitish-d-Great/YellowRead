@@ -13,41 +13,77 @@ function App() {
     totalArticles: 0,
     totalCost: 0,
   });
+  const [isInitializing, setIsInitializing] = useState(false);
 
   const nitroliteRef = useRef(null);
 
   const handleWalletConnect = async (address) => {
     console.log('🔗 Wallet connected:', address);
     setWalletAddress(address);
+    setIsInitializing(true);
 
-    // Initialize Nitrolite Service
-    const nitrolite = getNitroliteService();
-    await nitrolite.initialize(address);
-    nitrolite.createSession();
-    nitroliteRef.current = nitrolite;
+    try {
+      // Initialize Nitrolite Service with REAL SDK
+      const nitrolite = getNitroliteService();
+      await nitrolite.initialize(address);
+
+      // Create session (may involve wallet signing for real SDK)
+      await nitrolite.createSession();
+
+      nitroliteRef.current = nitrolite;
+      console.log('✅ Yellow Network session ready');
+    } catch (error) {
+      console.error('⚠️ Nitrolite initialization error:', error);
+      // Continue anyway - service will work in local mode
+      nitroliteRef.current = getNitroliteService();
+    }
+
+    setIsInitializing(false);
   };
 
   // OFF-CHAIN article tracking via Nitrolite
-  const handleArticleRead = (articleId) => {
+  const handleArticleRead = async (articleId) => {
     if (!sessionData.articlesRead.includes(articleId)) {
-      // Record in Nitrolite (off-chain, no signing)
+      // Record in Nitrolite (uses real SDK if connected)
       if (nitroliteRef.current) {
-        const state = nitroliteRef.current.recordArticleRead(articleId);
+        try {
+          const state = await nitroliteRef.current.recordArticleRead(articleId);
 
-        setSessionData({
-          articlesRead: [...state.articlesRead],
-          totalArticles: state.totalArticles,
-          totalCost: state.amountOwed,
-        });
+          // Defensive: ensure we have valid data
+          const articlesRead = Array.isArray(state?.articlesRead)
+            ? [...state.articlesRead]
+            : [...sessionData.articlesRead, articleId];
+
+          setSessionData({
+            articlesRead,
+            totalArticles: state?.totalArticles ?? articlesRead.length,
+            totalCost: state?.amountOwed ?? articlesRead.length * 0.001,
+          });
+        } catch (error) {
+          console.error('Error recording article read:', error);
+          // Fallback: update locally even if nitrolite fails
+          setSessionData(prev => ({
+            articlesRead: [...prev.articlesRead, articleId],
+            totalArticles: prev.totalArticles + 1,
+            totalCost: (prev.totalArticles + 1) * 0.001,
+          }));
+        }
+      } else {
+        // No nitrolite service, update locally
+        setSessionData(prev => ({
+          articlesRead: [...prev.articlesRead, articleId],
+          totalArticles: prev.totalArticles + 1,
+          totalCost: (prev.totalArticles + 1) * 0.001,
+        }));
       }
     }
   };
 
-  const handlePaymentComplete = () => {
+  const handlePaymentComplete = async () => {
     // Reset Nitrolite and create new session
     if (nitroliteRef.current) {
       nitroliteRef.current.reset();
-      nitroliteRef.current.createSession();
+      await nitroliteRef.current.createSession();
     }
 
     setSessionData({
@@ -71,6 +107,7 @@ function App() {
             <LandingPage
               onWalletConnect={handleWalletConnect}
               walletAddress={walletAddress}
+              isInitializing={isInitializing}
             />
           }
         />
