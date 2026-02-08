@@ -228,6 +228,10 @@ VITE_PRICE_PER_ARTICLE=0.001
 
 # Network
 VITE_CHAIN_ID=11155111
+VITE_NETWORK_NAME=sepolia
+
+#CRYPTOPANIC API KEY (Used to fetch news)
+VITE_CRYPTOPANIC_API_KEY=<enter your api key from where news would be fetched>
 ```
 
 ---
